@@ -1,13 +1,50 @@
 import time
 from space_network_lib import *
+from hashlib import sha256
 
 network = SpaceNetwork(level=6)
 MAX_DIST = 150
 
+# שגיאות מותאמות אישית
+class BrokenConnectionError(Exception):
+    pass
+
+class SecurityBreachError(Exception):
+    pass
+
+# הצפנת xor
+def xor_cipher(text, key):
+    result = []
+    for i in range(len(text)):
+        char = ord(text[i])
+        ch_key = ord(key[i % len(key)])
+        ch_pin = chr(char ^ ch_key)
+        result.append(ch_pin)
+    result = "".join(result)
+    return result
+
+#האש
+def get_hash(key):
+    return sha256(str(key).encode()).hexdigest()
+
+# חבילה עם data מוצפן
+class EncryptedPacket(Packet):
+    def __init__(self, data, sender, receiver, key):
+        super().__init__(data, sender, receiver)
+        self.key = get_hash(key)
+        self.data = xor_cipher(data, key)
+
+    def decrypt(self, key):
+        if get_hash(key) == self.key:
+            return xor_cipher(self.data, key)
+        else:
+            raise SecurityBreachError
+
 # לווין
 class Satellite(SpaceEntity):
-    def __init__(self, name, distance_from_earth):
+    def __init__(self, name, distance_from_earth, key):
         super().__init__(name, distance_from_earth)
+        self.key = key
 
     def receive_signal(self, packet: Packet):
         print(f"[{self.name}] Received: {packet}")
@@ -17,20 +54,37 @@ class Satellite(SpaceEntity):
             print(f"Unwrapping and forwarding to {inner_packet.receiver}")
             attempt_transmission(network, inner_packet)
         else:
-            print(f"Final destination reached: {packet.data}")
+            if isinstance(packet, EncryptedPacket):
+                try:
+                    message = packet.decrypt(self.key)
+                    print(f"Final destination reached: {message}")
+                except SecurityBreachError:
+                    print("מישהו ניסה לעבוד עליי עם מפתח לא נכון!")
+            else:
+                print(f"Final destination reached: {packet.data}")
 
 # כדור הארץ
 class Earth(SpaceEntity):
-    def __init__(self, name, distance_from_earth):
+    def __init__(self, name, distance_from_earth, key):
         super().__init__(name, distance_from_earth)
-
+        self.key = key
 
     def receive_signal(self, packet: Packet):
-        pass
+        print(f"[{self.name}] Received: {packet}")
 
-#שגיאה מותאמת אישית
-class BrokenConnectionError(Exception):
-    pass
+        if isinstance(packet, RelayPacket):
+            inner_packet = packet.data
+            print(f"Unwrapping and forwarding to {inner_packet.receiver}")
+            attempt_transmission(network, inner_packet)
+        else:
+            if isinstance(packet, EncryptedPacket):
+                try:
+                    message = packet.decrypt(self.key)
+                    print(f"Final destination reached: {message}")
+                except SecurityBreachError:
+                    print("מישהו ניסה לעבוד עליי עם מפתח לא נכון!")
+            else:
+                print(f"Final destination reached: {packet.data}")
 
 # חבילות ממסר
 class RelayPacket(Packet):
@@ -59,6 +113,7 @@ def attempt_transmission(manager: SpaceNetwork, packet):
         except OutOfRangeError:
             print("Target out of range")
             raise BrokenConnectionError()
+
 
 # מציאת נתיב קצר לשליחת הפאקטה בין גופים רחוקים
 def smart_send_packet(satellites: list, packet:Packet):
@@ -115,7 +170,9 @@ def smart_send_packet(satellites: list, packet:Packet):
 
         # יצירת הודעת ממסר בין הגופים שברשימה הסופית
         #הודעה פנימית
-        final_pac = Packet(packet.data, route_satellites.pop(), packet.receiver)
+        packet.sender = route_satellites.pop()
+        final_pac = packet
+
 
         #טיפול במקרה של פרוקסי בודד
         if len(route_satellites) == 0:
@@ -137,15 +194,15 @@ def smart_send_packet(satellites: list, packet:Packet):
 
 if __name__ == "__main__":
 
-    earth = Earth("Earth", 0)
+    earth = Earth("Earth", 0, "key")
 
-    sat1 = Satellite("sat1", 100)
-    sat2 = Satellite("sat2", 200)
-    sat3 = Satellite("sat3", 300)
-    sat4 = Satellite("sat4", 400)
+    sat1 = Satellite("sat1", 100, "key")
+    sat2 = Satellite("sat2", 200, "key")
+    sat3 = Satellite("sat3", 300, "key")
+    sat4 = Satellite("sat4", 400, "key")
 
     satellites_ = [sat1, sat2, sat3, sat4]
-    packet_ = Packet("Hello from Earth!!", sat3, earth)
+    packet_ = EncryptedPacket("חייזרים בדרך אליכם, הכניסו בירות למקפיא", sat3, earth, "key")
 
     try:
         smart_send_packet(satellites_, packet_)
